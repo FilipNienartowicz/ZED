@@ -1,0 +1,370 @@
+---
+title: "Projekt z analizy danych"
+author: "Filip Nienartowicz 122531"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    keep_md: yes
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+        echo = TRUE, 
+        message = FALSE,
+        warning = FALSE
+      )
+```
+
+#Podsumowanie
+
+(poni¿sze komentarze dostêpne s¹ równie¿ w miejscu ich dotycz¹cym)
+
+##a.d.3. Kod pozwalaj¹cy wczytaæ dane z pliku.
+Do wczytania danych wykorzysta³em funkcjê fread z pakietu data.table. Funkcja ta jest znacznie szybsza ni¿ read.table i pozwala na usuwanie zbêdnych kolumn ju¿ na etapie wczytywania danych. Dodatkowo prawid³owo rozpoznaje kolumny o typie Integer
+
+##a.d.5. Kod przetwarzaj¹cy brakuj¹ce dane.
+Dane zostaj¹ podzielone na 3 czêœci (part_00, part_01 i part_02). Prefisky kolumn usuniête, dodana kolumna part z wartoœci¹ odpowiedniego partu bêd¹cego Ÿród³em danych. Nastêpnie dane s¹ ³¹czone w jeden data frame. Proces ten usuwa wszystkie wartoœci NA - uzyskane dane s¹ wiêc wyczyszczone.
+
+Je¿eli any_meas* = 0, to zak³adam, ¿e nie nast¹pi³‚ pomiar (w kolejnych kolumnach dane NA, gdy¿ nie by³o podstawy do obliczeñ). W takiej sytuacji zamiana NA na np. œredni¹ nie ma sensu (0 elektronów nie mo¿e mieæ kszta³tu itp.) dlatego te¿ dane dotycz¹ce danego part zostaj¹ usuniête.
+
+*any_meas = shape_segments_count + density_segments_count + volume + electrons + mean + std + max + max_over_std + skewness + parts) [¿adna z tych zmiennych nie przyjmuje wartoœci < 0, wiêc suma == 0 jednoznacznie wskazuje na brak tych danych]
+
+##a.d.8. Sekcjê sprawdzaj¹c¹ korelacje miêdzy zmiennymi
+Poni¿ej znajduje siê wykres korelacji miêdzy zmiennymi. Zauwa¿yæ mo¿na, ¿e:
+
+* Du¿a czêœæ zmiennych jest w silnej korelacji z innymi zmiennymi
+
+* Zmienne density_Z* i shape_z* s¹ w bardzo silnej korelacji (du¿e czerwone prostok¹ty)
+
+* Zmienne local* koreluj¹ z zmiennymi z part (by³y obliczane na ich podstawie)
+
+##a.d.14 i 15
+Spoœród testowanych metod najlepiej sprawdzi³y siê:
+
+* Linear Regression (lm) dla regresji
+
+* Random Forest (rf) dla klasyfikacji
+
+Z racji du¿ego zbioru danych (ok. 1 mln rekordów) za metodê wybierania zbioru walidacyjnego wybra³em bootstrap (losowanie ze zwracaniem) - metoda zapewnia stratyfikacjê danych (https://machinelearningmastery.com/how-to-estimate-model-accuracy-in-r-using-the-caret-package/)
+
+##a.d.14.Sekcjê sprawdzaj¹c¹ czy na podstawie wartoœci innych kolumn mo¿na przewidzieæ:
+Na podstawie obliczeñ usatli³em, ¿e odpowiednio 3% i 1% danych powinien wystarczyæ jako zbiór testowy (z obliczeniami mo¿na zapoznaæ siê w sekcji 14)
+
+Liczba elektronów zosta³a okreœlona z miarami*:
+
+RMSE = 64,453
+
+r^2 = 0,48
+
+
+
+Liczba elektronów zosta³a okreœlona z miarami*:
+
+RMSE = 9,45
+
+r^2 = 0,49
+
+##a.d.15.Sekcjê próbuj¹c¹ stworzyæ klasyfikator przewiduj¹cy wartoœæ atrybutu res_name 
+Na podstawie obliczeñ usatli³em, ¿e 1% danych powinien wystarczyæ jako zbiór testowy (z obliczeniami mo¿na zapoznaæ siê w sekcji 15)
+
+Random Forest uzyska³ precyzjê* = 0,6
+
+Klasyfikator naiwny (wskazuj¹cy najliczniejsz¹ klasê) dokona³by predykcji res_name = SO4. Miara Accuracy = 0,15.
+
+* Podane wartoœci mog¹ nie byæ zgodne z koñcowymi wynikami. Z rezultatem mo¿na zapoznaæ siê w czêœci 14 i 15 niniejszego raportu.
+
+# 1. Kod wyliczaj¹cy wykorzystane biblioteki.
+```{r libraries}
+library(data.table)
+library(DT)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(reshape)
+library(caret)
+```
+
+```{r prettyTable, echo = FALSE, results='hide'}
+prettyTable <- function(table_df, round_columns=numeric(), round_digits=2) {
+    DT::datatable(table_df, style="bootstrap", rownames = FALSE, options = list(dom = 'Bfrtip', buttons = c('copy', 'csv', 'excel', 'pdf', 'print'), scrollX = TRUE)) %>%
+    formatRound(round_columns, round_digits)
+}
+```
+
+# 2. Kod zapewniaj¹cy powtarzalnoœæ wyników.
+```{r repeatable}
+set.seed(123)
+```
+
+# 3. Kod pozwalaj¹cy wczytaæ dane z pliku.
+Do wczytania danych wykorzysta³em funkcjê fread z pakietu data.table. Funkcja ta jest znacznie szybsza ni¿ read.table i pozwala na usuwanie zbêdnych kolumn ju¿ na etapie wczytywania danych. Dodatkowo prawid³owo rozpoznaje kolumny o typie Integer 
+```{r readdata}
+out_columns <- c("blob_coverage", "res_coverage", "title", "pdb_code", "res_id", "chain_id", "blob_volume_coverage", "blob_volume_coverage_second", "res_volume_coverage", "res_volume_coverage_second", "skeleton_cycle_4", "skeleton_diameter", "skeleton_cycle_6", "skeleton_cycle_7", "skeleton_closeness_006_008", "skeleton_closeness_002_004", "skeleton_cycle_3", "skeleton_avg_degree", "skeleton_closeness_004_006", "skeleton_closeness_010_012", "skeleton_closeness_012_014", "skeleton_edges", "skeleton_radius", "skeleton_cycle_8_plus", "skeleton_closeness_020_030", "skeleton_deg_5_plus", "skeleton_closeness_016_018", "skeleton_closeness_008_010", "skeleton_closeness_018_020", "skeleton_average_clustering", "skeleton_closeness_040_050", "skeleton_closeness_014_016", "skeleton_center", "skeleton_closeness_000_002", "skeleton_density", "skeleton_closeness_030_040", "skeleton_deg_4", "skeleton_deg_0", "skeleton_deg_1", "skeleton_deg_2", "skeleton_deg_3", "skeleton_graph_clique_number", "skeleton_nodes", "skeleton_cycles", "skeleton_cycle_5", "skeleton_closeness_050_plus", "skeleton_periphery", "local_cut_by_mainchain_volume", "local_near_cut_count_C", "local_near_cut_count_other", "local_near_cut_count_S", "local_near_cut_count_O", "local_near_cut_count_N", "fo_col", "fc_col", "weight_col", "grid_space", "solvent_radius", "solvent_opening_radius", "resolution_max_limit", "part_step_FoFc_std_min", "part_step_FoFc_std_max", "part_step_FoFc_std_step", "skeleton_data", "local_res_atom_count", "local_res_atom_non_h_occupancy_sum", "local_res_atom_non_h_electron_occupancy_sum", "local_res_atom_C_count", "local_res_atom_N_count", "local_res_atom_O_count", "local_res_atom_S_count", "dict_atom_C_count", "dict_atom_N_count", "dict_atom_O_count", "dict_atom_S_count")
+
+file = "C:/Users/Developer/Desktop/all_summary.csv"
+data <- fread(file = file, 
+             sep = ";", 
+             header = TRUE,
+             na.string = c(",,", "NAN", "nan"),
+             drop = out_columns
+            )
+```
+
+# 4. Kod usuwaj¹cy z danych wiersze posiadaj¹ce wartoœæ zmiennej res_name
+```{r outResNames}
+out_res_names = c("UNK", "UNX", "UNL", "DUM", "N", "BLOB", "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET", "MSE", "PHE", "PRO", "SEC", "SER", "THR", "TRP", "TYR", "VAL", "DA", "DG", "DT", "DC", "DU", "A", "G", "T", "C", "U", "HOH", "H20", "WAT")
+data <- data %>% filter(!res_name %in% out_res_names)
+```
+
+# 5. Kod przetwarzaj¹cy brakuj¹ce dane.
+Dane zostaj¹ podzielone na 3 czêœci (part_00, part_01 i part_02). Prefisky kolumn usuniête, dodana kolumna part z wartoœci¹ odpowiedniego partu bêd¹cego Ÿród³em danych. Nastêpnie dane s¹ ³¹czone w jeden data frame. Proces ten usuwa wszystkie wartoœci NA - uzyskane dane s¹ wiêc wyczyszczone.
+
+Je¿eli any_meas* = 0, to zak³adam, ¿e nie nast¹pi³‚ pomiar (w kolejnych kolumnach dane NA, gdy¿ nie by³o podstawy do obliczeñ). W takiej sytuacji zamiana NA na np. œredni¹ nie ma sensu (0 elektronów nie mo¿e mieæ kszta³tu itp.) dlatego te¿ dane dotycz¹ce danego part zostaj¹ usuniête.
+
+*any_meas = shape_segments_count + density_segments_count + volume + electrons + mean + std + max + max_over_std + skewness + parts) [¿adna z tych zmiennych nie przyjmuje wartoœci < 0, wiêc suma == 0 jednoznacznie wskazuje na brak tych danych]
+
+```{r NAValues}
+data_part00 <- data %>% 
+    select(-starts_with("part_01"), -starts_with("part_02")) %>% 
+    rename_at(.vars = vars(starts_with("part_00_")), .funs = funs(sub("^part_00_", "", .))) %>%
+    mutate(any_meas = shape_segments_count + density_segments_count + volume + electrons + mean + std + max + max_over_std + skewness + parts) %>%       
+    filter(any_meas != 0) %>% 
+    select(-any_meas) %>%
+    mutate(part = "part_00")
+
+data_part01 <- data %>% 
+    select(-starts_with("part_00"), -starts_with("part_02")) %>% 
+    rename_at(.vars = vars(starts_with("part_01_")), .funs = funs(sub("^part_01_", "", .))) %>%
+    mutate(any_meas = shape_segments_count + density_segments_count + volume + electrons + mean + std + max + max_over_std + skewness + parts) %>%       
+    filter(any_meas != 0) %>% 
+    select(-any_meas) %>%  
+    mutate(part = "part_01")
+
+data_part02 <- data %>% 
+    select(-starts_with("part_00"), -starts_with("part_01")) %>% 
+    rename_at(.vars = vars(starts_with("part_02_")), .funs = funs(sub("^part_02_", "", .))) %>%
+    mutate(any_meas = shape_segments_count + density_segments_count + volume + electrons + mean + std + max + max_over_std + skewness + parts) %>%       
+    filter(any_meas != 0) %>% 
+    select(-any_meas) %>%  
+    mutate(part = "part_02")
+data <- rbind(data_part00, data_part01, data_part02) 
+```
+W kolumnach znajduje siê local_min - kolumna ta ma 0 we wszystkich wierszach - jest wiêc zbêdna
+```{r out_local_min}
+data %>% select(local_min) %>% distinct()
+data <- data %>% select(-local_min)
+rm(data_part00, data_part01, data_part02)
+```
+
+# 6. Sekcjê podsumowuj¹c¹ rozmiar zbioru i podstawowe statystyki.
+##Wymiary:
+```{r dims}
+dim(data)
+```
+
+##Liczba unikalnych res_name
+```{r uniqueRes_name}
+data %>% select(res_name) %>% distinct() %>% nrow()
+```
+
+##Przyk³adów/part
+```{r n_Parts}
+data %>% group_by(part) %>% summarize(n = n()) %>% arrange(desc(n)) %>% prettyTable()
+```
+
+##Podstawowe statystyki pozosta³ych kolumn
+```{r statistics}
+data %>% select(-res_name, -starts_with("part")) %>%
+  summary() %>% 
+  unclass() %>%
+  data.frame(check.names = FALSE, stringsAsFactors = FALSE) %>% 
+  prettyTable()
+```
+
+# 7. Kod ograniczaj¹cy liczbê klas (res_name) do 50 najpopularniejszych wartoœci.
+```{r res_name_50}
+res_name50 <- data %>% group_by(res_name) %>% summarize(n = n()) %>% arrange(desc(n)) %>% head(50)
+data <- data %>% filter(res_name %in% res_name50$res_name)
+rm(res_name50)
+```
+
+# 8. Sekcjê sprawdzaj¹c¹ korelacje miêdzy zmiennymi
+Poni¿ej znajduje siê wykres korelacji miêdzy zmiennymi. Zauwa¿yæ mo¿na, ¿e:
+* Du¿a czêœæ zmiennych jest w silnej korelacji z innymi zmiennymi
+* Zmienne density_Z* i shape_z* s¹ w bardzo silnej korelacji (du¿e czerwone prostok¹ty)
+* Zmienne local* koreluj¹ z zmiennymi z part (by³y obliczane na ich podstawie)
+```{r cor}
+melted <- data %>% select(-res_name, -part) %>% cor() %>% melt
+breaks <- sort(colnames(data))[seq(1, ncol(data), by = 6)]
+
+(ggplot(data = melted, aes(x=X1, y=X2, fill=value)) + 
+    theme(
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(angle=45)
+      ) + 
+    scale_x_discrete(breaks = breaks) + 
+    scale_y_discrete(breaks = breaks) + 
+    geom_tile() +
+    scale_fill_gradient2(
+        low = "blue", high = "red", mid = "white", 
+        midpoint = 0, limit = c(-1,1))
+      ) %>%
+   ggplotly()
+
+rm(melted, breaks)
+```
+
+# 9. Okreœlenie ile przyk³adów ma ka¿da z klas.
+```{r n_res_name_50}
+data %>% select(res_name) %>% group_by(res_name) %>% summarize(n = n()) %>% arrange(desc(n)) %>% prettyTable()
+```
+
+# 10. Wykresy rozk³adów liczby atomów i elektronów.
+```{r plots}
+(ggplot(data, aes(local_res_atom_non_h_count, fill = "red")) + geom_bar() + theme_bw()) %>% ggplotly()
+(ggplot(data, aes(local_res_atom_non_h_electron_sum, fill = "red")) + geom_bar(width = 3) + theme_bw()) %>% ggplotly()
+```
+
+# 11. Tabelê pokazuj¹c¹ 10 klas z najwiêksz¹ niezgodnoœci¹ liczby atomów i liczby elektronów
+```{r classes_10}
+diff <- data %>% select(res_name, local_res_atom_non_h_count, dict_atom_non_h_count, local_res_atom_non_h_electron_sum, dict_atom_non_h_electron_sum) %>%
+  group_by(res_name) %>% summarize(atom_diff = sum(abs(local_res_atom_non_h_count - dict_atom_non_h_count)), electron_diff = sum(abs(local_res_atom_non_h_electron_sum - dict_atom_non_h_electron_sum)))
+
+diff %>% select(-electron_diff) %>% arrange(desc(atom_diff)) %>% head(10) %>% prettyTable()
+diff %>% select(-atom_diff) %>% arrange(desc(electron_diff)) %>% head(10) %>% prettyTable()
+
+rm(diff)
+```
+
+# 12. Sekcjê pokazuj¹c¹ rozk³ad wartoœci part_01 
+```{r part_01, fig.height=40}
+melted <- data %>% filter(part == "part_01") %>% select(shape_segments_count:density_Z_4_0) %>% melt
+means <-  melted %>% group_by(variable) %>% summarise(mean=mean(value)) 
+melted %>% ggplot(aes(value)) +
+    geom_density() +
+    geom_vline(data = means, aes(xintercept=mean), linetype="dashed", color = "red") +
+    geom_text(data=means, mapping=aes(x=mean, y=0, label=signif(mean, digits = 4)), 
+              size=3, angle=90, vjust= 1, hjust=0, color = "red"
+      )+  
+    facet_wrap(~variable, ncol = 4, scales = "free") +
+    theme_bw()+
+    theme(
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(angle=90)
+      ) 
+
+rm(melted, means)
+```
+
+# 13. Interaktywny wykres lub animacjê.
+W pkt 8. i 10.
+
+```{r rem_dict_atom, echo = FALSE}
+data <- data %>% select(-dict_atom_non_h_count, -dict_atom_non_h_electron_sum)
+```
+
+# 14.Sekcjê sprawdzaj¹c¹ czy na podstawie wartoœci innych kolumn mo¿na przewidzieæ:
+
+##liczbê elektronów 
+Posiadam ok 1mln przyk³adów podzielonych na n klas 
+```{r elektrons_n}
+n = data %>% select(local_res_atom_non_h_electron_sum) %>% distinct() %>% count()
+n
+```
+Zbiór testowy z³o¿ony z 3% tych danych powinien byæ wystarczaj¹cy. Ka¿da z klas bêdzie mia³a wiêc ok. k przyk³adów (zale¿nie od rozk³adu)
+```{r elektrons_k}
+k = nrow(data) * 0.03 / n
+k
+```
+
+```{r elektrons_reg}
+idx <- createDataPartition(data$local_res_atom_non_h_electron_sum, p=0.03, list=F, times = 1)
+test <- data.frame(data[idx,]) %>% select(-res_name, -local_res_atom_non_h_count)
+train <- data.frame(data[-idx,]) %>% select(-res_name, -local_res_atom_non_h_count)
+
+ctrl <- trainControl(
+    method = "boot", number = 20)
+ 
+fit <- train(local_res_atom_non_h_electron_sum ~ .,
+             data = train,
+             method = "lm",
+             trControl = ctrl,
+             metric = "Rsquared",
+             maximize = TRUE)
+
+fit
+rfClasses <- predict(fit, newdata = test) %>% round %>% as.integer
+
+rm(idx, train, test)
+```
+
+##liczbê atomów 
+Posiadam ok 1mln przyk³adów podzielonych na n klas 
+```{r atoms_n}
+n = data %>% select(local_res_atom_non_h_count) %>% distinct() %>% count()
+n
+```
+Zbiór testowy z³o¿ony z 1% tych danych powinien byæ wystarczaj¹cy. Ka¿da z klas bêdzie mia³a wiêc ok. k przyk³adów (zale¿nie od rozk³adu)
+```{r atoms_k}
+k = nrow(data) * 0.01 / n
+k
+```
+
+```{r atoms_reg}
+idx <- createDataPartition(data$local_res_atom_non_h_count, p=0.01, list=F, times = 1)
+test <- data.frame(data[idx,]) %>% select(-res_name, -local_res_atom_non_h_electron_sum)
+train <- data.frame(data[-idx,]) %>% select(-res_name, -local_res_atom_non_h_electron_sum)
+
+ctrl <- trainControl(
+    method = "boot", number = 20)
+
+fit <- train(local_res_atom_non_h_count ~ .,
+             data = train,
+             method = "lm",
+             trControl = ctrl,
+             metric = "Rsquared",
+             maximize = TRUE)
+
+fit
+rfClasses <- predict(fit, newdata = test)
+
+rm(idx, train, test)
+```
+
+# 15. Sekcjê próbuj¹c¹ stworzyæ klasyfikator przewiduj¹cy wartoœæ atrybutu res_name 
+Posiadam ok 1mln przyk³adów podzielonych na 50 klas
+Zbiór testowy z³o¿ony z 1% tych danych powinien byæ wystarczaj¹cy. Ka¿da z klas bêdzie mia³a wiêc ok. k przyk³adów (zale¿nie od rozk³adu)
+```{r res_name_k}
+k = nrow(data) * 0.01 / 50
+k
+```
+
+```{r res_name_class}
+data$res_name <- as.factor(data$res_name)
+
+idx <- createDataPartition(data$res_name, p=0.03, list=F, times = 1)
+test <- data.frame(data[idx,]) %>% select(-local_res_atom_non_h_electron_sum, -local_res_atom_non_h_count)
+train <- data.frame(data[-idx,]) %>% select(-local_res_atom_non_h_electron_sum, -local_res_atom_non_h_count)
+
+ctrl <- trainControl(
+    method = "boot", number = 5)
+
+fit <- train(res_name ~ .,
+             data = train,
+             method = "rf",
+             trControl = ctrl,
+             ntree = 10,
+             metric = "Accuracy",
+             maximize = TRUE
+             )
+
+fit
+rfClasses <- predict(fit, newdata = test)
+confusionMatrix(data = rfClasses, test$res_name)
+
+rm(idx, train, test)
+```
